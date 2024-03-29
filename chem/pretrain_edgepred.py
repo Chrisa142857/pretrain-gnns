@@ -18,7 +18,7 @@ from sklearn.metrics import roc_auc_score
 from splitters import scaffold_split, random_split, random_scaffold_split
 import pandas as pd
 
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 
 criterion = nn.BCEWithLogitsLoss()
 
@@ -68,7 +68,7 @@ def main():
                         help='dropout ratio (default: 0)')
     parser.add_argument('--JK', type=str, default="last",
                         help='how the node features across layers are combined. last, sum, max or concat')
-    parser.add_argument('--dataset', type=str, default = 'zinc_standard_agent', help='root directory of dataset. For now, only classification.')
+    parser.add_argument('--dataset', type=str, default = 'hiv', help='root directory of dataset. For now, only classification.')
     parser.add_argument('--output_model_file', type = str, default = '', help='filename to output the pre-trained model')
     parser.add_argument('--gnn_type', type=str, default="gin")
     parser.add_argument('--num_workers', type=int, default = 8, help='number of workers for dataset loading')
@@ -82,7 +82,7 @@ def main():
         torch.cuda.manual_seed_all(0)
 
     #set up dataset
-    dataset = MoleculeDataset("dataset/" + args.dataset, dataset=args.dataset, transform = NegativeEdge())
+    dataset = MoleculeDataset("chem/dataset/" + args.dataset, dataset=args.dataset, transform = NegativeEdge())
 
     print(dataset[0])
 

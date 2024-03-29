@@ -45,7 +45,7 @@ def train(args, model, device, loader, optimizer):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch implementation of pre-training of graph neural networks')
-    parser.add_argument('--device', type=int, default=0,
+    parser.add_argument('--device', type=int, default=3,
                         help='which gpu to use if any (default: 0)')
     parser.add_argument('--batch_size', type=int, default=256,
                         help='input batch size for training (default: 256)')
@@ -76,7 +76,7 @@ def main():
         torch.cuda.manual_seed_all(0)
 
     #set up dataset
-    root_unsupervised = 'dataset/unsupervised'
+    root_unsupervised = 'bio/dataset/unsupervised'
     dataset = BioDataset(root_unsupervised, data_type='unsupervised', transform = NegativeEdge())
 
     print(dataset)

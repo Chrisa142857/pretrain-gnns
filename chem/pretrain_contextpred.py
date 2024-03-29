@@ -23,7 +23,7 @@ from dataloader import DataLoaderSubstructContext
 
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
 
 def pool_func(x, batch, mode = "sum"):
     if mode == "sum":
