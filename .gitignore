@@ -1,3 +1,6 @@
 */dataset
 */*dataset.zip
 */__pycache__
+multiview/
+*.log
+*/*/*.pth
