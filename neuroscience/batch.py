@@ -193,6 +193,23 @@ class BatchSubstructContext(Data):
         self.batch = batch
 
     @staticmethod
+    def from_data_list_list(data_lists):
+        r"""Constructs a batch object from a python list holding
+        :class:`torch_geometric.data.Data` objects.
+        The assignment vector :obj:`batch` is created on the fly."""
+        #keys = [set(data.keys) for data in data_list]
+        #keys = list(set.union(*keys))
+        #assert 'batch' not in keys
+        batches = {}
+        for k in data_lists[0]:
+            # if k not in batches: batches[k] = []
+            batches[k] = BatchSubstructContext.from_data_list([data_list[k] for data_list in data_lists])
+        assert batches[k].center_substruct_idx.shape[0] == len(data_lists), f"{batches[k].center_substruct_idx.shape[0]} != {len(data_lists)}, no distant neighbor nodes, reduce l1 !"
+        # for data_list in data_lists:
+        #      batches.append(BatchSubstructContext.from_data_list(data_list))
+        return batches
+    
+    @staticmethod
     def from_data_list(data_list):
         r"""Constructs a batch object from a python list holding
         :class:`torch_geometric.data.Data` objects.
@@ -256,7 +273,8 @@ class BatchSubstructContext(Data):
                 i += 1
 
         for key in keys:
-            batch[key] = torch.cat(batch[key], dim=batch.cat_dim(key))
+            batch[key] = torch.cat(
+                batch[key], dim=batch.cat_dim(key))
         #batch.batch = torch.cat(batch.batch, dim=-1)
         batch.batch_overlapped_context = torch.cat(batch.batch_overlapped_context, dim=-1)
         batch.overlapped_context_size = torch.LongTensor(batch.overlapped_context_size)

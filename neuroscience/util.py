@@ -180,6 +180,7 @@ class ExtractSubstructureContextPair:
         substruct_node_idxes = nx.single_source_shortest_path_length(G,
                                                                      root_idx,
                                                                      self.k).keys()
+        assert len(substruct_node_idxes) > 0, f"{G}, {root_idx}"
         if len(substruct_node_idxes) > 0:
             substruct_G = G.subgraph(substruct_node_idxes)
             substruct_G, substruct_node_map = reset_idxes(substruct_G)  # need
@@ -225,7 +226,7 @@ class ExtractSubstructureContextPair:
             data.overlap_context_substruct_idx = \
                 torch.tensor(context_substruct_overlap_idxes_reorder)
 
-        return data
+        return data, root_idx
 
         # ### For debugging ###
         # if len(substruct_node_idxes) > 0:

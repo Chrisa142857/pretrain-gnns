@@ -1,4 +1,4 @@
-import os, torch
+import os, torch, random
 from scipy.io import loadmat
 from torch.utils.data import Dataset
 from multiprocessing import get_context
@@ -12,6 +12,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import remove_self_loops, add_self_loops
 from torch.nn.utils.rnn import pad_sequence
 
+from util import graph_data_obj_to_nx_simple
+
 
 ATLAS_FACTORY = ['AAL_116', 'Aicha_384', 'Gordon_333', 'Brainnetome_264', 'Shaefer_100', 'Shaefer_200', 'Shaefer_400']
 BOLD_FORMAT = ['.csv', '.csv', '.tsv', '.csv', '.tsv', '.tsv', '.tsv']
@@ -19,7 +21,6 @@ THREAD_N = 30
 BOXPLOT_ORDER = None
 PE_K = 6
 MDNN_MAX_DEGREE = 10
-ADJ_TYPE = 'FC'
 
 ######
 FC_WINSIZE = 500
@@ -42,14 +43,16 @@ def Schaefer_SCname_match_FCname(scn, fcn):
 class HCPAScFcDatasetOnDisk(Dataset):
 
     def __init__(self, atlas_name,
-                data_root = '/ram/USERS/bendan/ACMLab_DATA/HCP-A-SC_FC',
-                node_attr = 'FC', nn_type = 'mpnn', transform=None, pretain=True,
-                direct_filter = [],
+                data_root = '/ram/USERS/bendan/ACMLab_DATA/HCP-A-SC_FC', adj_type='FC',
+                node_attr = 'FC', nn_type = 'mpnn', transform=None, pretain=True, load_multview=False,
+                direct_filter = [], l1 = 1, l2 = 2, task_filter=[],
                 # fc_winsize = 100,
                 fc_winoverlap = 0.1,
                 fc_th = 0.5,
                 sc_th = 0.1,
                 dek = 5) -> None:
+        self.load_multview = load_multview
+        self.adj_type = adj_type
         self.pretain = pretain
         self.transform = transform
         self.data_root = data_root
@@ -115,6 +118,7 @@ class HCPAScFcDatasetOnDisk(Dataset):
             subn = fn.split('_')[subn_p]
             task = fn.split('_')[subtask_p]
             direc = fn.split('_')[subdir_p]
+            if task in task_filter: continue
             if direc in direct_filter: continue
             assert subn in region, subn
             if task not in self.task_name: self.task_name.append(task)
@@ -143,6 +147,33 @@ class HCPAScFcDatasetOnDisk(Dataset):
         self.data_subj = np.unique(self.fc_subject)
         self.node_num = len(self.regions)
         self.nn_type = nn_type
+        if not os.path.exists('hcp_scfc_available_multicontext_rootid.pth') and load_multview:
+            self.root_id_list = []
+            all_avail = []
+            for i in trange(len(self), desc='Prepare multicontext root ID'):
+                avails = []
+                for tadj in ['SC', 'FC']:
+                    self.adj_type = tadj
+                    data = self.__getitem__(i, False, None)
+                    G = graph_data_obj_to_nx_simple(data)
+                    available = []
+                    for j in range(len(data.x)):
+                        l1_node_idxes = nx.single_source_shortest_path_length(G, j,
+                                                                            l1).keys()
+                        l2_node_idxes = nx.single_source_shortest_path_length(G, j,
+                                                                            l2).keys()
+                        context_node_idxes = set(l1_node_idxes).symmetric_difference(
+                            set(l2_node_idxes))
+                        if len(context_node_idxes) > 0: available.append(j)
+                    assert len(available) > 0, self.edge_fn[i] + ' ' + tadj + ' no nodes in l1 ~ l2'
+                    avails.append(available)
+                available = list(np.intersect1d(avails[0], avails[1]))
+                assert len(available) > 0, self.edge_fn[i] + 'no available nodes in l1 ~ l2'
+                all_avail.append(available)
+                random.shuffle(available)
+                self.root_id_list.append(available[0])
+        
+        self.adj_type = adj_type
         # if nn_type == 'mdnn':
         #     # fc_mat = torch.cat([x[0] for x in torch.load(fc_adj_root+'.zip')]) 
         #     # self.max_degree = (torch.cat([x[0] for x in torch.load(fc_adj_root+'.zip')]) > fc_th).sum(2).max()
@@ -151,68 +182,80 @@ class HCPAScFcDatasetOnDisk(Dataset):
         # self.fc_edge_list = [torch.load(self.edge_fn[index]).T for index in trange(len(self), desc='Preloading data')]
         # self.fc_list = [torch.load(self.fc_adj_path[index]).T for index in trange(len(self), desc='Preloading data')]
 
-    def __getitem__(self, index):
+    def __getitem__(self, index, load_multiview=True, root_idx=None):
         subjn = self.fc_subject[index]
-        if ADJ_TYPE == 'FC':
-            edge_index = torch.load(self.edge_fn[index]).T
-            fc = torch.load(self.fc_adj_path[index])
-            # edge_index = self.fc_edge_list[index]
-            # fc = self.fc_list[index]
-            edge_attr = fc[edge_index[0], edge_index[1]].unsqueeze(1).repeat(1, 2)
+        if self.load_multview and load_multiview:
+            out = {}
+            adj_type = self.adj_type
+            self.adj_type = 'FC'
+            out['view1'] = self.__getitem__(index, False, self.root_id_list[index])
+            self.adj_type = 'SC'
+            out['view2'] = self.__getitem__(index, False, self.root_id_list[index])
+            self.adj_type = adj_type
+            return out
+
         else:
-            edge_index  = torch.stack(torch.where(self.all_sc[subjn]>0))
-            edge_attr = self.all_sc[subjn][edge_index[0], edge_index[1]].unsqueeze(1).repeat(1, 2)
-        
-        if self.node_attr=='FC':
-            x = fc
-        elif self.node_attr=='BOLD':
-            x = self.bolds[index]
-        elif self.node_attr=='SC':
-            x = self.all_sc[subjn]
-        elif self.node_attr=='ID':
-            x = torch.arange(self.all_sc[subjn].shape[0]).float()[:, None]
-        elif self.node_attr=='DEN':
-            x = torch.load(self.de_fn[index]).float().sum(1)[:, None]
-        elif self.node_attr=='DE':
-            x = torch.load(self.de_fn[index]).float() * self.all_sc[subjn]
-        elif self.node_attr=='FC+DE':
-            x = torch.cat([torch.load(self.fc_adj_path[index]),torch.load(self.de_fn[index])], dim=1).float()
-        elif self.node_attr=='SC+DE':
-            x = torch.cat([self.all_sc[subjn],torch.load(self.de_fn[index])], dim=1).float()
-        
-        # self_loop_attr = torch.zeros(x.size(0), 9)
-        # self_loop_attr[:, 7] = 1  # attribute for self-loop edge
-        # self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
-        # edge_attr = torch.cat((edge_attr, self_loop_attr), dim=0)
-        
-        if self.nn_type == 'mdnn':
-            A = torch.zeros(self.all_sc[subjn].shape[0], self.all_sc[subjn].shape[0])
-            A[edge_index[0], edge_index[1]] = 1
-            L, V = torch.linalg.eig(A.sum(1)-A)
-            pe = V[:, :PE_K].real
-            dee_mat = torch.load(self.de_fn[index]).float()#[edge_index[0], edge_index[1]]
-            fc_mat = torch.load(self.fc_adj_path[index])
-            fc_mat[fc_mat.isnan()] = 0
-            first_k_fc_ind = torch.stack([self.mdnn_fc_filter_ind, fc_mat.argsort(dim=1,descending=True)[:, :MDNN_MAX_DEGREE].reshape(-1)])
-            fc = fc_mat[first_k_fc_ind[0], first_k_fc_ind[1]]
-            dee = dee_mat[first_k_fc_ind[0], first_k_fc_ind[1]]
-            first_k_fc = fc > self.fc_th
-            xlist, pad_mask, _ = segment_node_with_neighbor(first_k_fc_ind[:, first_k_fc], node_attrs=[x, pe], edge_attrs=[dee[first_k_fc, None], fc[first_k_fc, None]])
-            pad_mask = torch.cat([pad_mask, torch.zeros(pad_mask.shape[0], self.max_degree-pad_mask.shape[1], 1, dtype=pad_mask.dtype)], 1) 
-            xlist = [torch.cat([s, torch.zeros(s.shape[0], self.max_degree-s.shape[1], s.shape[2], dtype=s.dtype)], 1) for s in xlist]
-            data = Data(x=x, edge_index=edge_index, node_attr=torch.cat([xlist[0], xlist[3]],-1), pe=xlist[1], dee=xlist[2], id=xlist[4], pad_mask=pad_mask)
-        else:
-            data = Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr.float())#, subject=subjn, y=self.fc_task[index]
-        if self.transform is not None:
-            data = self.transform(data)
-        if self.pretain:
-            return data
-        else:
-            return {
-                'data':data,
-                'subject':subjn,
-                'label':self.fc_task[index]
-            }
+            if self.adj_type == 'FC':
+                edge_index = torch.load(self.edge_fn[index]).T
+                fc = torch.load(self.fc_adj_path[index])
+                # edge_index = self.fc_edge_list[index]
+                # fc = self.fc_list[index]
+                edge_attr = fc[edge_index[0], edge_index[1]].unsqueeze(1).repeat(1, 2)
+            else:
+                edge_index  = torch.stack(torch.where(self.all_sc[subjn]>(self.sc_th)))
+                edge_attr = self.all_sc[subjn][edge_index[0], edge_index[1]].unsqueeze(1).repeat(1, 2)
+            
+            if self.node_attr=='FC':
+                x = torch.load(self.fc_adj_path[index])
+            elif self.node_attr=='BOLD':
+                x = self.bolds[index]
+            elif self.node_attr=='SC':
+                x = self.all_sc[subjn]
+            elif self.node_attr=='ID':
+                x = torch.arange(self.all_sc[subjn].shape[0]).float()[:, None]
+            elif self.node_attr=='DEN':
+                x = torch.load(self.de_fn[index]).float().sum(1)[:, None]
+            elif self.node_attr=='DE':
+                x = torch.load(self.de_fn[index]).float() * self.all_sc[subjn]
+            elif self.node_attr=='FC+DE':
+                x = torch.cat([torch.load(self.fc_adj_path[index]),torch.load(self.de_fn[index])], dim=1).float()
+            elif self.node_attr=='SC+DE':
+                x = torch.cat([self.all_sc[subjn],torch.load(self.de_fn[index])], dim=1).float()
+            
+            # self_loop_attr = torch.zeros(x.size(0), 9)
+            # self_loop_attr[:, 7] = 1  # attribute for self-loop edge
+            # self_loop_attr = self_loop_attr.to(edge_attr.device).to(edge_attr.dtype)
+            # edge_attr = torch.cat((edge_attr, self_loop_attr), dim=0)
+            
+            if self.nn_type == 'mdnn':
+                A = torch.zeros(self.all_sc[subjn].shape[0], self.all_sc[subjn].shape[0])
+                A[edge_index[0], edge_index[1]] = 1
+                L, V = torch.linalg.eig(A.sum(1)-A)
+                pe = V[:, :PE_K].real
+                dee_mat = torch.load(self.de_fn[index]).float()#[edge_index[0], edge_index[1]]
+                fc_mat = torch.load(self.fc_adj_path[index])
+                fc_mat[fc_mat.isnan()] = 0
+                first_k_fc_ind = torch.stack([self.mdnn_fc_filter_ind, fc_mat.argsort(dim=1,descending=True)[:, :MDNN_MAX_DEGREE].reshape(-1)])
+                fc = fc_mat[first_k_fc_ind[0], first_k_fc_ind[1]]
+                dee = dee_mat[first_k_fc_ind[0], first_k_fc_ind[1]]
+                first_k_fc = fc > self.fc_th
+                xlist, pad_mask, _ = segment_node_with_neighbor(first_k_fc_ind[:, first_k_fc], node_attrs=[x, pe], edge_attrs=[dee[first_k_fc, None], fc[first_k_fc, None]])
+                pad_mask = torch.cat([pad_mask, torch.zeros(pad_mask.shape[0], self.max_degree-pad_mask.shape[1], 1, dtype=pad_mask.dtype)], 1) 
+                xlist = [torch.cat([s, torch.zeros(s.shape[0], self.max_degree-s.shape[1], s.shape[2], dtype=s.dtype)], 1) for s in xlist]
+                data = Data(x=x, edge_index=edge_index, node_attr=torch.cat([xlist[0], xlist[3]],-1), pe=xlist[1], dee=xlist[2], id=xlist[4], pad_mask=pad_mask)
+            else:
+                data = Data(x=x.float(), edge_index=edge_index, edge_attr=edge_attr.float())#, subject=subjn, y=self.fc_task[index]
+            if self.transform is not None:
+                data, root_idx = self.transform(data.clone(), root_idx)
+                data.root_idx = root_idx
+            if self.pretain:
+                return data
+            else:
+                return {
+                    'data':data,
+                    'subject':subjn,
+                    'label':self.fc_task[index]
+                }
 
     def __len__(self):
         return len(self.edge_fn)
@@ -722,16 +765,23 @@ def segment_node_with_neighbor(edge_index, node_attrs=[], edge_attrs=[], pad_val
     return seq, seq_mask, edge_index
 
 if __name__ == '__main__':
-    import seaborn as sns
-    import matplotlib.pyplot as plt
+    # import seaborn as sns
+    # import matplotlib.pyplot as plt
     # dset = HCPAScFcDataset(ATLAS_FACTORY[0], dek=3)
     # dset.group_boxplot_analysis()
     # dset.group_avg_analysis()
     # exit()
-    for dek in tqdm([3,5,7]):
-        for i in tqdm([2]):
-            dset = HCPAScFcDataset(ATLAS_FACTORY[i], dek=dek)
-            # dset.group_avg_analysis()
-            # dset.group_boxplot_analysis()
-            # dset.group_edge_significance_analysis()
-            dset.group_node_significance_analysis()
+    # for dek in tqdm([3,5,7]):
+    #     for i in tqdm([2]):
+    #         dset = HCPAScFcDataset(ATLAS_FACTORY[i], dek=dek)
+    #         # dset.group_avg_analysis()
+    #         # dset.group_boxplot_analysis()
+    #         # dset.group_edge_significance_analysis()
+    #         dset.group_node_significance_analysis()
+    for data in HCPAScFcDatasetOnDisk('AAL_116'):
+        print(data)
+        G = graph_data_obj_to_nx_simple(data)
+        print(G)
+        random_path = nx.generate_random_paths(G, 10)
+        print(list(random_path))
+        exit()

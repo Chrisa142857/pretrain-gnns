@@ -116,10 +116,15 @@ def main():
     parser.add_argument('--num_layers', type=int, default = 1, help='A range of [1,2,3]-layer MLPs with equal width')
     parser.add_argument('--pnum', type=int, default = 5, help='The number of independent basis for GPF-plus')
     parser.add_argument('--max_patience', type=int, default = 30)
-    parser.add_argument('--graph_view', type=str, default = 'SC')
+    parser.add_argument('--graph_view1', type=str, default = 'SC')
+    parser.add_argument('--graph_view2', type=str, default = 'SC')
     parser.add_argument('--use_gpf', action='store_true')
     args = parser.parse_args()
-    args.model_file = args.model_file % args.graph_view
+    # args.model_file = args.model_file % args.graph_view
+    # args.model_file = 'neuroscience/model_weights/graphviewFC-SC_multicontextpred_onlyrest.pth.pth'
+    # args.model_file = 'neuroscience/model_weights/graphviewFC-SC_multicontextpred_onlyrest.pth.pth'
+    # args.model_file = 'neuroscience/model_weights/graphviewSC-FC_contextpred_onlyrest.pth.pth'
+    args.model_file = ""
     torch.manual_seed(args.runseed)
     np.random.seed(args.runseed)
     device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
@@ -129,7 +134,7 @@ def main():
 
     in_dim = 116
     num_tasks = 4
-    dataset = HCPAScFcDatasetOnDisk('AAL_116', node_attr=args.graph_view, pretain=False)
+    dataset = HCPAScFcDatasetOnDisk('AAL_116', adj_type=args.graph_view1, node_attr=args.graph_view2, pretain=False)
     # print(dataset)
 
     all_subjects = dataset.data_subj
